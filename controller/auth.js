@@ -1,16 +1,18 @@
+// ------------------ auth.js ------------------
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { pool } = require('../db/dbConfig');
+const { promisePool } = require('../db/dbConfig'); // <-- FIXED
 
 const router = express.Router();
 
-// User Registration
+
+// ====================== REGISTER ======================
 router.post('/register', async (req, res) => {
   try {
     const { username, email, password } = req.body;
 
-    // Validation
+    // Validate fields
     if (!username || !email || !password) {
       return res.status(400).json({
         success: false,
@@ -25,8 +27,8 @@ router.post('/register', async (req, res) => {
       });
     }
 
-    // Check if user already exists
-    const [existingUsers] = await pool.execute(
+    // Check user exists
+    const [existingUsers] = await promisePool.execute(
       'SELECT id FROM users WHERE username = ? OR email = ?',
       [username, email]
     );
@@ -39,21 +41,20 @@ router.post('/register', async (req, res) => {
     }
 
     // Hash password
-    const saltRounds = 10;
-    const hashedPassword = await bcrypt.hash(password, saltRounds);
+    const hashedPassword = await bcrypt.hash(password, 10);
 
     // Create user
-    const [result] = await pool.execute(
+    const [result] = await promisePool.execute(
       'INSERT INTO users (username, email, password) VALUES (?, ?, ?)',
       [username, email, hashedPassword]
     );
 
-    // Generate JWT token
+    // JWT
     const token = jwt.sign(
       {
         userId: result.insertId,
-        username: username,
-        email: email
+        username,
+        email
       },
       process.env.JWT_SECRET,
       { expiresIn: '24h' }
@@ -62,30 +63,30 @@ router.post('/register', async (req, res) => {
     res.status(201).json({
       success: true,
       message: 'User registered successfully',
-      token: token,
+      token,
       user: {
         id: result.insertId,
-        username: username,
-        email: email,
+        username,
+        email,
         balance: 10000.00
       }
     });
 
   } catch (error) {
     console.error('Registration error:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: 'Internal server error during registration'
     });
   }
 });
 
-// Login endpoint
+
+// ====================== LOGIN ======================
 router.post('/login', async (req, res) => {
   try {
     const { username, password } = req.body;
 
-    // Validation
     if (!username || !password) {
       return res.status(400).json({
         success: false,
@@ -93,8 +94,8 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    // Find user by username or email
-    const [users] = await pool.execute(
+    // Get user by username/email
+    const [users] = await promisePool.execute(
       'SELECT * FROM users WHERE username = ? OR email = ?',
       [username, username]
     );
@@ -108,16 +109,16 @@ router.post('/login', async (req, res) => {
 
     const user = users[0];
 
-    // Check password
-    const validPassword = await bcrypt.compare(password, user.password);
-    if (!validPassword) {
+    // Validate password
+    const isPasswordCorrect = await bcrypt.compare(password, user.password);
+    if (!isPasswordCorrect) {
       return res.status(401).json({
         success: false,
         error: 'Invalid credentials'
       });
     }
 
-    // Generate JWT token
+    // Generate token
     const token = jwt.sign(
       {
         userId: user.id,
@@ -128,10 +129,10 @@ router.post('/login', async (req, res) => {
       { expiresIn: '24h' }
     );
 
-    res.json({
+    return res.json({
       success: true,
       message: 'Login successful',
-      token: token,
+      token,
       user: {
         id: user.id,
         username: user.username,
@@ -142,14 +143,15 @@ router.post('/login', async (req, res) => {
 
   } catch (error) {
     console.error('Login error:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: 'Internal server error during login'
     });
   }
 });
 
-// Get current user profile (protected route)
+
+// ====================== PROFILE (PROTECTED) ======================
 router.get('/profile', async (req, res) => {
   try {
     const token = req.headers.authorization?.split(' ')[1];
@@ -163,7 +165,7 @@ router.get('/profile', async (req, res) => {
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    const [users] = await pool.execute(
+    const [users] = await promisePool.execute(
       'SELECT id, username, email, balance, created_at FROM users WHERE id = ?',
       [decoded.userId]
     );
@@ -175,18 +177,20 @@ router.get('/profile', async (req, res) => {
       });
     }
 
-    res.json({
+    return res.json({
       success: true,
       user: users[0]
     });
 
   } catch (error) {
     console.error('Profile error:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: 'Failed to fetch profile'
     });
   }
 });
 
+
+// EXPORT ROUTER
 module.exports = router;
