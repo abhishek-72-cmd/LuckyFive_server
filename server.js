@@ -1,50 +1,83 @@
-// ------------ server.js -------------
+// server.js (final, cleaned, timing-patched)
+// Usage: node server.js
+require('dotenv').config();
+
 const express = require('express');
 const http = require('http');
+const cors = require('cors');
 const socketio = require('socket.io');
-const cors = require("cors");   // <-- ADD THIS
-const { promisePool } = require('./db/dbConfig');
 const jwt = require('jsonwebtoken');
-const luckyEngine = require('./game/luckyFive');
+
+// DB config - keep your existing file (exports pool and promisePool)
+const { pool, promisePool } = require('./db/dbConfig');
+
+// Auth routes (unchanged)
 const authRoutes = require('./controller/auth');
-require("dotenv").config();
+
+// Game engine (keeps DB integration inside engine). We will pass promisePool and jwt.
+const startLuckyFive = require('./game/luckyFive');
 
 const app = express();
-const server = http.createServer(app);
-
-// ======= ENABLE CORS FOR EXPRESS API =======
-app.use(cors({
-  origin: "http://localhost:5173",   // your frontend
-  methods: ["GET", "POST"],
-  allowedHeaders: ["Content-Type", "Authorization"]
-}));
-
-// ======= ENABLE JSON BODY PARSER =======
+app.use(cors());
 app.use(express.json());
 
-// ======= SOCKET.IO SETUP =======
+// mount auth API (same as your previous)
+app.use('/api/auth', authRoutes);
+
+// create HTTP server + socket.io
+const server = http.createServer(app);
+
+// socket.io config — keep transports + CORS like you asked
 const io = socketio(server, {
   cors: {
-    origin: "http://localhost:5173",
-    methods: ["GET", "POST"],
-    allowedHeaders: ["Content-Type"],
+    origin: '*',
+    methods: ['GET', 'POST'],
+    allowedHeaders: ['Content-Type', 'Authorization']
   },
-  transports: ["websocket", "polling"]
+  transports: ['websocket', 'polling']
 });
 
-// Start Game Engine
-luckyEngine(io, { promisePool, jwtLib: jwt });
+// Helpful startup logs
+console.log('-----------------------------');
+console.log('🌐 LuckyFive Server starting');
+console.log('PORT:', process.env.PORT || 5000);
+console.log('DB Host:', process.env.DB_HOST || 'localhost');
+console.log('-----------------------------');
 
-// API Routes
-app.use("/api/auth", authRoutes);
+// Basic DB connectivity check (non-blocking)
+(async function testDB() {
+  try {
+    const conn = await promisePool.getConnection();
+    conn.release();
+    console.log('✅ DB connection OK');
+  } catch (err) {
+    console.error('❌ DB connection failed (check .env / credentials):', err && err.code ? err.code : err);
+  }
+})();
 
-// Socket logs
-io.on("connection", (socket) => {
+// Start the LuckyFive game engine.
+// We pass io, promisePool and jwt so engine has DB + JWT access.
+// The engine file (./game/luckyFive.js) should be implemented as:
+// module.exports = function(io, { promisePool, jwtLib }) { ... }
+try {
+  startLuckyFive(io, { promisePool, jwtLib: jwt });
+  console.log('🎮 LuckyFive Engine attached');
+} catch (err) {
+  console.error('❌ Failed to attach LuckyFive engine:', err);
+  // still continue: server will run but game engine might be broken
+}
+
+// Fallback: small socket-level logs for connection (keeps your previous behavior)
+io.on('connection', (socket) => {
   console.log(`[SOCKET] Connected: ${socket.id}`);
+
+  socket.on('disconnect', (reason) => {
+    console.log(`[SOCKET] Disconnected: ${socket.id} (${reason})`);
+  });
 });
 
-// Start Server
+// Start HTTP server
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
-console.log(`Server is running on http://localhost:${PORT}`)
+  console.log(`🚀 Server running on port ${PORT}`);
 });
